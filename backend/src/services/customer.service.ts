@@ -1,9 +1,16 @@
+import { pool } from '../db/pool';
 import { Customer } from '../types/models';
-import { createCrudService } from './crud.service';
+import { AppError } from '../utils/AppError';
 
-export const customerService = createCrudService<Customer>({
-  table: 'customer',
-  idColumn: 'cust_id',
-  entityName: 'Customer',
-  columns: ['fname', 'lname', 'cust_cont', 'cust_mail'],
-});
+export const customerProfileColumns = 'cust_id, fname, lname, cust_cont, cust_mail, created_at, updated_at';
+
+export const customerService = {
+  async getById(id: number): Promise<Customer> {
+    const { rows: [customer] } = await pool.query<Customer>(
+      `SELECT ${customerProfileColumns} FROM customer WHERE cust_id = $1`,
+      [id],
+    );
+    if (!customer) throw AppError.notFound('Customer', id);
+    return customer;
+  },
+};

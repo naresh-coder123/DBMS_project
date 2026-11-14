@@ -62,9 +62,8 @@ backend/
 │   │   ├── crud.controller.ts    # generic handlers: validate → service → JSON
 │   │   └── order.controller.ts
 │   ├── routes/
-│   │   ├── index.ts              # mounts every resource under /api
-│   │   ├── crud.routes.ts        # crudRouter(service, schemas)
-│   │   └── order.routes.ts
+│   │   ├── index.ts              # explicit customer endpoints under /api
+│   │   └── order.routes.ts       # internal order handlers, currently unmounted
 │   ├── middleware/errorHandler.ts# maps AppError / zod / Postgres errors to HTTP
 │   ├── utils/AppError.ts
 │   ├── app.ts                    # Express app
@@ -83,7 +82,7 @@ Tables come from the ER diagram, with these corrections:
 
 | Table | Key | Relationship |
 |---|---|---|
-| `customer` | `cust_id` | places orders (1:N), makes payments (1:N) |
+| `customer` | `cust_id` | stores the salted password hash for registered accounts, places orders (1:N), makes payments (1:N) |
 | `restaurant` | `rest_id` | offers menu items (1:N), prepares orders (1:N) |
 | `delivery_person` | `dp_id` | independent, not tied to a restaurant; picks orders (1:N) |
 | `menu_item` | `menu_item_id` | FK `rest_id` |
@@ -165,53 +164,24 @@ Errors raised by triggers (`RAISE EXCEPTION`, SQLSTATE `P0001`) come back from t
 
 ## API reference
 
-Base URL: `/api`. Request and response bodies are JSON and use the DB column names (snake_case).
+All paths below are under `/api`. For protected calls, send the JWT from login in the `Authorization: Bearer <token>` header. JWTs expire after 24 hours.
 
-### Simple CRUD resources
+Set `JWT_SECRET` to a random secret to keep tokens valid across server restarts. Use the backend `.env` for local development or set it in the Compose environment for Docker. With an empty value, the server generates a new secret at startup.
 
-| Resource | Path | List filters (query string) |
+| Method and path | Body or behavior | Access |
 |---|---|---|
-| Customers | `/customers` | — |
-| Restaurants | `/restaurants` | — |
-| Delivery persons | `/delivery-persons` | `is_available` |
-| Menu items | `/menu-items` | `rest_id`, `item_category`, `is_available` |
+| `POST /signup` | `fname`, optional `lname`, `cust_cont`, `cust_mail`, `password` (8 to 128 characters) | Public |
+| `POST /login` | `cust_mail`, `password`; returns `token` and `expires_at` | Public |
+| `GET /user` | Current customer profile | Protected |
+| `GET /restaurants` | List restaurants | Public |
+| `GET /restaurants/:id/menu` | List available items for a restaurant | Public |
+| `GET /ordercart` | List your unpaid orders with status `PLACED` | Protected |
+| `POST /ordercart` | `rest_id`, `o_addr`, and `items` containing `menu_item_id` and `quantity` | Protected |
+| `GET /orderhistory` | List your orders across all statuses | Protected |
+| `GET /orderhistory/:id` | Get one of your orders with its items and payment | Protected |
+| `POST /payment` | `o_id` and `amount_paid`; records a local payment and marks the order `PAID` | Protected |
 
-Each supports: `GET /` (list, `?limit=20&offset=0`) · `GET /:id` · `POST /` · `PATCH /:id` (partial update) · `DELETE /:id`
-
-### Orders
-
-| Method & path | Body |
-|---|---|
-| `GET /orders` | filters: `status`, `cust_id`, `rest_id`, `dp_id` |
-| `GET /orders/:id` | order with its items and payment |
-| `GET /orders/:id/history` | status change log |
-| `POST /orders` | `{ cust_id, rest_id, o_addr, items: [{ menu_item_id, quantity }] }` |
-| `PATCH /orders/:id` | `{ o_addr }` (PLACED only) |
-| `POST /orders/:id/items` | `{ menu_item_id, quantity }` |
-| `PATCH /orders/:id/items/:lineNo` | `{ quantity }` |
-| `DELETE /orders/:id/items/:lineNo` | — |
-| `POST /orders/:id/pay` | `{ amount_paid }` |
-| `POST /orders/:id/assign` | — |
-| `POST /orders/:id/deliver` | — |
-| `POST /orders/:id/cancel` | — |
-
-### Payments (read-only)
-
-These are created through `/orders/:id/pay` and refunded through `/orders/:id/cancel`.
-
-`GET /payments` (filters: `cust_id`, `o_id`, `status`) · `GET /payments/:id`
-
-### Example
-
-```bash
-curl -X POST localhost:3000/api/orders -H "Content-Type: application/json" \
-  -d '{"cust_id":3,"rest_id":1,"o_addr":"Hinjewadi","items":[{"menu_item_id":1,"quantity":2}]}'
-
-curl -X POST localhost:3000/api/orders/6/pay -H "Content-Type: application/json" -d '{"amount_paid":500}'
-curl -X POST localhost:3000/api/orders/6/assign
-curl -X POST localhost:3000/api/orders/6/deliver
-curl localhost:3000/api/orders/6/history
-```
+`/restaurents` is an alias for `/restaurants`, including its menu path. List endpoints accept `limit` and `offset`. To try the full flow with seeded restaurants and menus, sign up with a new email and phone number, log in, submit a cart, and pass its returned `o_id` to payment.
 
 ### Error responses
 

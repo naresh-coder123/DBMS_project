@@ -47,9 +47,15 @@ const orderCrud = createCrudService<Order>({
 
 export const listOrders = orderCrud.list;
 
-export async function getOrder(orderId: number, db: Pick<PoolClient, 'query'> = pool): Promise<OrderDetails> {
+export async function getOrder(
+  orderId: number,
+  db: Pick<PoolClient, 'query'> = pool,
+  customerId?: number,
+): Promise<OrderDetails> {
   const { rows: [order] } = await db.query<Order>('SELECT * FROM orders WHERE o_id = $1', [orderId]);
-  if (!order) throw AppError.notFound('Order', orderId);
+  if (!order || (customerId !== undefined && order.cust_id !== customerId)) {
+    throw AppError.notFound('Order', orderId);
+  }
 
   const { rows: items } = await db.query<OrderDetails['items'][number]>(
     `SELECT oi.*, mi.item_name, (oi.quantity * oi.item_price)::NUMERIC(10,2) AS line_total
@@ -169,9 +175,12 @@ export async function removeOrderItem(orderId: number, lineNo: number): Promise<
  * Trigger fn_payment_fill computes total/change; trigger fn_order_validate_status
  * refuses PAID unless the payment row exists in this same transaction.
  */
-export async function payOrder(orderId: number, amountPaid: number): Promise<OrderDetails> {
+export async function payOrder(orderId: number, amountPaid: number, customerId?: number): Promise<OrderDetails> {
   return withTransaction(async (client) => {
     const order = await lockOrder(client, orderId);
+    if (customerId !== undefined && order.cust_id !== customerId) {
+      throw AppError.notFound('Order', orderId);
+    }
     requireStatus(order, ['PLACED'], 'pay for');
 
     await client.query('INSERT INTO payment (o_id, amount_paid) VALUES ($1, $2)', [orderId, amountPaid]);

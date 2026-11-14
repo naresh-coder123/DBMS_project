@@ -6,9 +6,13 @@ CREATE TABLE customer (
     lname       VARCHAR(50),
     cust_cont   VARCHAR(15)  NOT NULL UNIQUE,
     cust_mail   VARCHAR(100) UNIQUE,
+    password_hash TEXT,
     created_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
+
+CREATE UNIQUE INDEX idx_customer_email_lower ON customer (lower(cust_mail))
+    WHERE cust_mail IS NOT NULL;
 
 CREATE TABLE restaurant (
     rest_id       SERIAL PRIMARY KEY,

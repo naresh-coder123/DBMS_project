@@ -12,12 +12,13 @@ app.get('/', (_req, res) => {
     name: 'Food Delivery API',
     health: '/health',
     endpoints: [
-      '/api/customers',
+      '/api/login',
+      '/api/signup',
+      '/api/user',
       '/api/restaurants',
-      '/api/delivery-persons',
-      '/api/menu-items',
-      '/api/orders',
-      '/api/payments',
+      '/api/ordercart',
+      '/api/orderhistory',
+      '/api/payment',
     ],
   });
 });
