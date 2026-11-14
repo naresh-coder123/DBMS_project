@@ -11,7 +11,7 @@ A food delivery app built from the project ER diagram.
 
 ```bash
 docker compose up --build                       # db + api + web
-docker compose exec api node dist/db/seed.js    # load sample data
+docker compose exec api node dist/db/seed.js --no-orders    # seed a fresh database with sample restaurants and menus
 ```
 
 | Service | URL |
