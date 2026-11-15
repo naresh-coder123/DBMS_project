@@ -78,7 +78,20 @@ router.get('/orderhistory/:id', requireCustomer, async (req, res) => {
 
 router.post('/payment', requireCustomer, async (req, res) => {
   const { o_id, amount_paid } = payment.parse(req.body);
-  res.json(await orders.payOrder(o_id, amount_paid, res.locals.customerId));
+  const customerId = res.locals.customerId;
+  const paid = await orders.payOrder(o_id, amount_paid, customerId);
+  try {
+    res.json(await orders.assignDelivery(o_id, customerId));
+  } catch (error) {
+    // Payment has committed. Keep the paid order available for assignment retry.
+    console.error('Delivery assignment failed after payment', error);
+    res.json(paid);
+  }
+});
+
+router.post('/orderhistory/:id/assign-delivery', requireCustomer, async (req, res) => {
+  const { id } = idParamSchema.parse(req.params);
+  res.json(await orders.assignDelivery(id, res.locals.customerId));
 });
 
 export default router;

@@ -1,7 +1,7 @@
 import { PoolClient } from 'pg';
 import { pool } from '../db/pool';
 import { withTransaction } from '../db/transaction';
-import { Order, OrderItem, OrderStatusLog, Payment } from '../types/models';
+import { DeliveryPerson, Order, OrderItem, OrderStatusLog, Payment } from '../types/models';
 import { AppError } from '../utils/AppError';
 import { createCrudService } from './crud.service';
 
@@ -15,6 +15,7 @@ export interface NewOrder {
 export interface OrderDetails extends Order {
   items: (OrderItem & { item_name: string; line_total: string })[];
   payment: Payment | null;
+  delivery_person: Pick<DeliveryPerson, 'dp_id' | 'fname' | 'lname'> | null;
 }
 
 /**
@@ -67,7 +68,12 @@ export async function getOrder(
   );
   const { rows: [payment] } = await db.query<Payment>('SELECT * FROM payment WHERE o_id = $1', [orderId]);
 
-  return { ...order, items, payment: payment ?? null };
+  const deliveryPerson = order.dp_id === null ? null : (await db.query<NonNullable<OrderDetails['delivery_person']>>(
+    'SELECT dp_id, fname, lname FROM delivery_person WHERE dp_id = $1',
+    [order.dp_id],
+  )).rows[0] ?? null;
+
+  return { ...order, items, payment: payment ?? null, delivery_person: deliveryPerson };
 }
 
 export async function getStatusHistory(orderId: number): Promise<OrderStatusLog[]> {
@@ -190,23 +196,32 @@ export async function payOrder(orderId: number, amountPaid: number, customerId?:
 }
 
 /**
- * TX: assign = lock order -> pick any free delivery person, the one idle the
- * longest first (FOR UPDATE SKIP LOCKED so parallel assignments never pick the
+ * TX: assign = lock order -> pick a random free delivery person
+ * (FOR UPDATE SKIP LOCKED so parallel assignments never pick the
  * same person) -> mark them busy -> set order OUT_FOR_DELIVERY.
  */
-export async function assignDelivery(orderId: number): Promise<OrderDetails> {
+export async function assignDelivery(orderId: number, customerId?: number): Promise<OrderDetails> {
   return withTransaction(async (client) => {
     const order = await lockOrder(client, orderId);
+    if (customerId !== undefined && order.cust_id !== customerId) {
+      throw AppError.notFound('Order', orderId);
+    }
+    if (order.status === 'OUT_FOR_DELIVERY' || order.status === 'DELIVERED') {
+      return getOrder(orderId, client);
+    }
     requireStatus(order, ['PAID'], 'assign delivery for');
 
     const { rows: [dp] } = await client.query<{ dp_id: number }>(
       `SELECT dp_id FROM delivery_person
        WHERE is_available
-       ORDER BY updated_at, dp_id
+       ORDER BY random()
        LIMIT 1
        FOR UPDATE SKIP LOCKED`,
     );
-    if (!dp) throw AppError.conflict('No delivery person is available right now');
+    if (!dp) {
+      if (customerId !== undefined) return getOrder(orderId, client);
+      throw AppError.conflict('No delivery person is available right now');
+    }
 
     await client.query('UPDATE delivery_person SET is_available = FALSE WHERE dp_id = $1', [dp.dp_id]);
     await client.query("UPDATE orders SET dp_id = $1, status = 'OUT_FOR_DELIVERY' WHERE o_id = $2", [
@@ -225,6 +240,24 @@ export async function markDelivered(orderId: number): Promise<OrderDetails> {
     await client.query("UPDATE orders SET status = 'DELIVERED' WHERE o_id = $1", [orderId]);
     return getOrder(orderId, client);
   });
+}
+
+/** Complete demo deliveries after five seconds. The status trigger releases each rider. */
+export async function completeDueDeliveries(): Promise<void> {
+  await pool.query(`
+    WITH due AS (
+      SELECT o_id
+      FROM orders
+      WHERE status = 'OUT_FOR_DELIVERY'
+        AND updated_at <= now() - interval '5 seconds'
+      ORDER BY o_id
+      FOR UPDATE SKIP LOCKED
+    )
+    UPDATE orders
+    SET status = 'DELIVERED'
+    FROM due
+    WHERE orders.o_id = due.o_id
+  `);
 }
 
 /** TX: cancel = refund payment (if any) + set CANCELLED, together. */

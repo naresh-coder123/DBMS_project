@@ -179,7 +179,8 @@ Set `JWT_SECRET` to a random secret to keep tokens valid across server restarts.
 | `POST /ordercart` | `rest_id`, `o_addr`, and `items` containing `menu_item_id` and `quantity` | Protected |
 | `GET /orderhistory` | List your orders across all statuses | Protected |
 | `GET /orderhistory/:id` | Get one of your orders with its items and payment | Protected |
-| `POST /payment` | `o_id` and `amount_paid`; records a local payment and marks the order `PAID` | Protected |
+| `POST /payment` | `o_id` and `amount_paid`. Records a demo payment, then attempts to assign a random available delivery person | Protected |
+| `POST /orderhistory/:id/assign-delivery` | Retries assignment for a paid order. Returns the current order if it already has a delivery person or availability is still pending | Protected |
 
 `/restaurents` is an alias for `/restaurants`, including its menu path. List endpoints accept `limit` and `offset`. To try the full flow with seeded restaurants and menus, sign up with a new email and phone number, log in, submit a cart, and pass its returned `o_id` to payment.
 
