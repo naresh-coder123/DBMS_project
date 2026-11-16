@@ -1,5 +1,6 @@
 import { RequestHandler, Router } from 'express';
 import { z } from 'zod';
+import { transactionsForOrder } from '../db/transaction';
 import * as auth from '../services/auth.service';
 import { customerService } from '../services/customer.service';
 import { restaurantService } from '../services/restaurant.service';
@@ -83,8 +84,9 @@ router.post('/payment', requireCustomer, async (req, res) => {
   try {
     res.json(await orders.assignDelivery(o_id, customerId));
   } catch (error) {
-    // Payment has committed. Keep the paid order available for assignment retry.
-    console.error('Delivery assignment failed after payment', error);
+    // Payment has already committed. Only the assignment rolled back:
+    // the order stays PAID and the background job assigns it when a rider is free.
+    if (!(error instanceof AppError)) console.error('Delivery assignment failed after payment', error);
     res.json(paid);
   }
 });
@@ -92,6 +94,18 @@ router.post('/payment', requireCustomer, async (req, res) => {
 router.post('/orderhistory/:id/assign-delivery', requireCustomer, async (req, res) => {
   const { id } = idParamSchema.parse(req.params);
   res.json(await orders.assignDelivery(id, res.locals.customerId));
+});
+
+router.post('/orderhistory/:id/cancel', requireCustomer, async (req, res) => {
+  const { id } = idParamSchema.parse(req.params);
+  res.json(await orders.cancelOrder(id, res.locals.customerId));
+});
+
+// What PostgreSQL did for this order: recorded transactions + the trigger-written status log.
+router.get('/orderhistory/:id/db-activity', requireCustomer, async (req, res) => {
+  const { id } = idParamSchema.parse(req.params);
+  await orders.getOrder(id, undefined, res.locals.customerId); // 404 unless it is this customer's order
+  res.json({ transactions: transactionsForOrder(id), history: await orders.getStatusHistory(id) });
 });
 
 export default router;

@@ -7,7 +7,7 @@ npm install
 npm run dev        # http://localhost:5173
 ```
 
-In dev, Vite proxies `/api` and `/health` to the backend at `http://localhost:3000` (see `vite.config.ts`), so call the API with relative URLs such as `fetch('/api/orders')`. Start the backend first.
+In dev, Vite proxies `/api` and `/health` to the backend at `http://localhost:3000` (see `vite.config.ts`), so call the API with relative URLs such as `fetch('/api/restaurants')`. Start the backend first.
 
 | Script | What it does |
 |---|---|

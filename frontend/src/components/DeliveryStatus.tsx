@@ -12,7 +12,7 @@ export default function DeliveryStatus({ order, busy, retry }: { order: OrderDet
       </svg>
       <div aria-live="polite">
         <h2>{status === 'DELIVERED' ? 'Order delivered' : status === 'OUT_FOR_DELIVERY' ? 'Out for delivery' : 'Waiting for a delivery person'}</h2>
-        {person ? <p>Delivery person <strong>{person.fname} {person.lname}</strong></p> : status === 'PAID' && <p>Payment received. Delivery assignment is pending.</p>}
+        {person ? <p>Delivery person <strong>{person.fname} {person.lname}</strong></p> : status === 'PAID' && <p>Payment is saved, but every delivery person is busy, so the assignment was rolled back. A rider is assigned automatically as soon as one is free.</p>}
       </div>
     </div>
     <ol className="delivery-steps">

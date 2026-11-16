@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { email, name, nonEmpty, NON_EMPTY_MSG, phone } from './common.validator';
+import { email, name, phone } from './common.validator';
 
 export const createCustomerSchema = z
   .object({
@@ -9,5 +9,3 @@ export const createCustomerSchema = z
     cust_mail: email.optional(),
   })
   .strict();
-
-export const updateCustomerSchema = createCustomerSchema.partial().refine(nonEmpty, NON_EMPTY_MSG);

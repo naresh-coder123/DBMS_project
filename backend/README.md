@@ -44,26 +44,23 @@ If you need a database, run `docker compose up -d db` from the project root. In 
 backend/
 ├── db/migrations/
 │   ├── 001_schema.sql            # tables, constraints, indexes
-│   └── 002_triggers.sql          # trigger functions + triggers
+│   ├── 002_triggers.sql          # trigger functions + triggers
+│   └── 003_trigger_notices.sql   # same triggers + RAISE NOTICE, so the UI can show them firing
 ├── src/
 │   ├── config/env.ts             # environment variables
 │   ├── db/
 │   │   ├── pool.ts               # pg connection pool
-│   │   ├── transaction.ts        # withTransaction(): manual BEGIN / COMMIT / ROLLBACK
+│   │   ├── transaction.ts        # withTransaction(): manual BEGIN / COMMIT / ROLLBACK + activity log
 │   │   ├── migrate.ts            # tiny SQL migration runner (schema_migrations table)
 │   │   └── seed.ts               # seed script
 │   ├── types/models.ts           # row interfaces
-│   ├── validators/               # zod schemas per resource (request validation)
+│   ├── validators/               # zod schemas (common, customer, order)
 │   ├── services/                 # all SQL lives here
-│   │   ├── crud.service.ts       # generic parameterised CRUD (list/get/create/update/delete)
-│   │   ├── order.service.ts      # order transactions
-│   │   └── *.service.ts          # per-table config for the generic CRUD
-│   ├── controllers/
-│   │   ├── crud.controller.ts    # generic handlers: validate → service → JSON
-│   │   └── order.controller.ts
-│   ├── routes/
-│   │   ├── index.ts              # explicit customer endpoints under /api
-│   │   └── order.routes.ts       # internal order handlers, currently unmounted
+│   │   ├── auth.service.ts       # signup / login / JWT
+│   │   ├── crud.service.ts       # generic parameterised reads (list / getById)
+│   │   ├── order.service.ts      # order reads + order transactions
+│   │   └── *.service.ts          # customer, restaurant, menu item
+│   ├── routes/index.ts           # all customer endpoints under /api
 │   ├── middleware/errorHandler.ts# maps AppError / zod / Postgres errors to HTTP
 │   ├── utils/AppError.ts
 │   ├── app.ts                    # Express app
@@ -72,7 +69,7 @@ backend/
 └── .env.example
 ```
 
-Request flow: **route → controller (zod validation) → service (SQL) → PostgreSQL (constraints + triggers)**
+Request flow: **route (zod validation) → service (SQL) → PostgreSQL (constraints + triggers)**
 
 ---
 
@@ -130,15 +127,17 @@ try {
 
 The transactions live in [`src/services/order.service.ts`](src/services/order.service.ts):
 
-| Endpoint | Steps inside one transaction | Concurrency control |
-|---|---|---|
-| `POST /orders` | INSERT order → INSERT each item | All-or-nothing: a bad item rolls back the whole order |
-| `POST /orders/:id/items` etc. | lock order → change item | `SELECT … FOR UPDATE` on the order |
-| `POST /orders/:id/pay` | lock order → INSERT payment → status `PAID` | `FOR UPDATE` blocks double payment |
-| `POST /orders/:id/assign` | lock order → pick any free delivery person (idle longest first) → mark busy → `OUT_FOR_DELIVERY` | `FOR UPDATE SKIP LOCKED`, so parallel assigns never pick the same person |
-| `POST /orders/:id/deliver` | status `DELIVERED` (trigger frees the delivery person) | `FOR UPDATE` |
-| `POST /orders/:id/cancel` | refund payment → status `CANCELLED` | `FOR UPDATE` |
-| `DELETE /orders/:id/items/:lineNo` | DELETE → if no items are left, throw → **ROLLBACK** | shows a rollback triggered by a business rule |
+| Transaction | Started by | Steps inside one transaction | Concurrency control |
+|---|---|---|---|
+| `createOrder` | `POST /ordercart` | INSERT order → INSERT each item | All-or-nothing: a bad item rolls back the whole order |
+| `payOrder` | `POST /payment` | lock order → INSERT payment → status `PAID` | `FOR UPDATE` blocks double payment; paying too little → trigger T6 → **ROLLBACK** |
+| `assignDelivery` | `POST /payment`, retry button, background job | lock order → pick a random free delivery person → mark busy → `OUT_FOR_DELIVERY` | `FOR UPDATE SKIP LOCKED`; no free rider → **ROLLBACK**, order stays `PAID` and waits |
+| `completeDueDeliveries` | background job, every second | orders out for `DELIVERY_SECONDS` (default 60) → `DELIVERED`; trigger T5 frees the rider | `FOR UPDATE SKIP LOCKED` |
+| `cancelOrder` | `POST /orderhistory/:id/cancel` | refund payment → status `CANCELLED` | `FOR UPDATE` |
+
+Payment and assignment are separate transactions on purpose: a busy fleet rolls back only the assignment, never the customer's payment. The background job ([`server.ts`](src/server.ts)) assigns the longest-waiting `PAID` order as soon as a rider is free.
+
+Every order transaction is recorded (statements, trigger notices, COMMIT/ROLLBACK) and shown on the order page under **Database activity**. The record is kept in memory, so it starts empty after a restart.
 
 Migrations ([`migrate.ts`](src/db/migrate.ts)) and the seed run in transactions too.
 > After a rolled-back insert, the next `o_id` skips a number. Sequences are not transactional in PostgreSQL; this is expected.
@@ -147,7 +146,7 @@ Migrations ([`migrate.ts`](src/db/migrate.ts)) and the seed run in transactions 
 
 ## Triggers
 
-All in [`db/migrations/002_triggers.sql`](db/migrations/002_triggers.sql):
+Defined in [`db/migrations/002_triggers.sql`](db/migrations/002_triggers.sql). [`003_trigger_notices.sql`](db/migrations/003_trigger_notices.sql) replaces the same functions with a `RAISE NOTICE` added to each, so the API can show which triggers fired:
 
 | # | Trigger | When | What it does |
 |---|---|---|---|
@@ -179,8 +178,10 @@ Set `JWT_SECRET` to a random secret to keep tokens valid across server restarts.
 | `POST /ordercart` | `rest_id`, `o_addr`, and `items` containing `menu_item_id` and `quantity` | Protected |
 | `GET /orderhistory` | List your orders across all statuses | Protected |
 | `GET /orderhistory/:id` | Get one of your orders with its items and payment | Protected |
-| `POST /payment` | `o_id` and `amount_paid`. Records a demo payment, then attempts to assign a random available delivery person | Protected |
-| `POST /orderhistory/:id/assign-delivery` | Retries assignment for a paid order. Returns the current order if it already has a delivery person or availability is still pending | Protected |
+| `POST /payment` | `o_id` and `amount_paid`. Records a demo payment, then attempts to assign a random available delivery person. If none is free, the order stays `PAID` | Protected |
+| `POST /orderhistory/:id/assign-delivery` | Retries assignment for a paid order. 409 if no delivery person is free | Protected |
+| `POST /orderhistory/:id/cancel` | Cancels a `PLACED` or `PAID` order and refunds its payment | Protected |
+| `GET /orderhistory/:id/db-activity` | Recorded transactions for the order, plus its `order_status_log` rows | Protected |
 
 `/restaurents` is an alias for `/restaurants`, including its menu path. List endpoints accept `limit` and `offset`. To try the full flow with seeded restaurants and menus, sign up with a new email and phone number, log in, submit a cart, and pass its returned `o_id` to payment.
 
