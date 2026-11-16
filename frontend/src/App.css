@@ -74,10 +74,43 @@ textarea { resize: vertical; }
 .payment-confirmation svg { flex: 0 0 56px; width: 56px; height: 56px; }
 .payment-confirmation circle { fill: var(--color-success); }
 .payment-confirmation path { fill: none; stroke: var(--color-text-main); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+.amount-field { display: grid; gap: .35rem; font-weight: 700; }
+.amount-field input { width: 100%; padding: .72rem; border: 1px solid var(--color-text-muted); border-radius: .55rem; background: var(--color-bg-base); color: inherit; }
+.db-activity { display: grid; gap: .9rem; margin-top: 1.5rem; padding: clamp(1rem, 4vw, 1.6rem); background: var(--color-bg-card); border: 1px solid var(--color-border); border-radius: 1rem; }
+.db-activity h2 { font-size: clamp(1.5rem, 4vw, 2rem); margin: .3rem 0 .4rem; }
+.db-activity h3 { font-size: 1rem; margin-top: .4rem; }
+.db-activity h3 small { font-weight: 400; color: var(--color-text-muted); margin-left: .35rem; }
+.tx { border: 1px solid var(--color-border); border-radius: .7rem; background: var(--color-bg-base); }
+.tx summary { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .6rem; padding: .7rem .85rem; cursor: pointer; }
+.tx-meta { color: var(--color-text-muted); font-size: .85rem; }
+.tx-outcome { padding: .05rem .5rem; border-radius: .35rem; font-size: .75rem; font-weight: 700; letter-spacing: .06em; }
+.tx-outcome.commit { background: var(--color-success); color: var(--color-text-main); }
+.tx-outcome.rollback { background: var(--color-primary); color: var(--color-bg-card); }
+.tx-steps { display: grid; gap: .25rem; margin: 0; padding: 0 .85rem .85rem; list-style: none; }
+.tx-steps li { display: grid; grid-template-columns: 5.2rem 1fr; gap: .5rem; align-items: start; padding: .3rem .45rem; border-radius: .4rem; }
+.tx-steps li > span { font-size: .68rem; font-weight: 700; letter-spacing: .08em; padding-top: .15rem; color: var(--color-text-muted); }
+.tx-steps code { font: .8rem/1.45 ui-monospace, Consolas, monospace; overflow-wrap: anywhere; }
+.tx-steps li[data-kind=tx] { font-weight: 700; }
+.tx-steps li[data-kind=tx] code { font-weight: 700; }
+.tx-steps li[data-kind=trigger] { background: #FFF3CC; margin-left: 1rem; }
+.tx-steps li[data-kind=trigger] > span { color: #7A5600; }
+.tx-steps li[data-kind=error] { background: #FDE2DF; }
+.tx-steps li[data-kind=error] > span { color: var(--color-primary-hover); }
+.tx-steps li[data-read=true] { opacity: .6; }
+.table-wrap { overflow-x: auto; }
+.db-activity table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+.db-activity th, .db-activity td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--color-border); white-space: nowrap; }
+.db-activity th { font: 700 .75rem ui-monospace, Consolas, monospace; color: var(--color-text-muted); }
+.db-activity td { text-transform: capitalize; }
+.toast { position: fixed; right: 1.5rem; bottom: 1.5rem; z-index: 10; display: flex; align-items: center; gap: .75rem; max-width: min(420px, calc(100% - 2rem)); padding: .9rem .6rem .9rem 1.1rem; border-radius: .8rem; background: var(--color-text-main); color: var(--color-bg-card); font-weight: 600; box-shadow: 0 10px 30px rgb(0 0 0 / .22); }
+.toast button { flex: none; width: 36px; height: 36px; border: 0; border-radius: 50%; background: transparent; color: inherit; font-size: 1.4rem; line-height: 1; }
+.toast button:hover { background: rgb(255 255 255 / .15); }
 @media (prefers-reduced-motion: no-preference) {
+  .toast { animation: toast-in .3s ease-out both; }
   .payment-confirmation svg { animation: payment-pop .35s ease-out both; }
   .payment-confirmation path { stroke-dasharray: 1; animation: payment-tick .35s .15s ease-out both; }
 }
+@keyframes toast-in { from { opacity: 0; transform: translateY(1rem); } to { opacity: 1; transform: translateY(0); } }
 @keyframes payment-pop { from { opacity: 0; transform: scale(.65); } to { opacity: 1; transform: scale(1); } }
 @keyframes payment-tick { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
 @media (max-width: 680px) {
@@ -88,4 +121,7 @@ textarea { resize: vertical; }
   .hero, .menu-hero { grid-template-columns: 1fr; margin-top: 1rem; }
   .hero-photo, .menu-hero img { min-height: 0; height: clamp(155px, 43vw, 260px); }
   .restaurant-card img { height: 170px; }
+  .toast { right: 1rem; left: 1rem; bottom: 1rem; max-width: none; }
+  .tx-steps li { grid-template-columns: 1fr; gap: .1rem; }
+  .tx-steps li[data-kind=trigger] { margin-left: .5rem; }
 }

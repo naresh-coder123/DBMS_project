@@ -1,6 +1,9 @@
 export type Restaurant = { rest_id: number; rest_name: string; rest_address: string; rest_cont: string }
 export type Dish = { menu_item_id: number; item_name: string; item_category: string | null; price: string }
 export type Order = { o_id: number; rest_id: number; o_addr: string; o_date: string; total_amount: string; status: string }
-export type OrderDetail = Order & { items: { line_no: number; item_name: string; quantity: number; line_total: string }[]; payment: { pay_id: number; amount_paid: string; status: string } | null; delivery_person: { dp_id: number; fname: string; lname: string | null } | null }
+export type OrderDetail = Order & { items: { line_no: number; item_name: string; quantity: number; line_total: string }[]; payment: { pay_id: number; total_amount: string; amount_paid: string; amount_returned: string; status: string } | null; delivery_person: { dp_id: number; fname: string; lname: string | null } | null }
 export type Customer = { fname: string; lname: string | null; cust_mail: string; cust_cont: string }
-export type Basket = { restaurant: Restaurant; lines: { dish: Dish; quantity: number }[] }
+export type TxStep = { kind: 'tx' | 'sql' | 'trigger' | 'error'; text: string }
+export type TxRecord = { id: number; name: string; startedAt: string; ms: number; outcome: 'COMMIT' | 'ROLLBACK'; steps: TxStep[] }
+export type DbActivity = { transactions: TxRecord[]; history: { log_id: number; old_status: string | null; new_status: string; changed_at: string }[] }
+export type Basket ={ restaurant: Restaurant; lines: { dish: Dish; quantity: number }[] }

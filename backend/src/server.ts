@@ -1,7 +1,7 @@
 import { app } from './app';
 import { env } from './config/env';
 import { pool } from './db/pool';
-import { completeDueDeliveries } from './services/order.service';
+import { assignWaitingOrder, completeDueDeliveries } from './services/order.service';
 
 const server = app.listen(env.port, () => {
   console.log(`API listening on http://localhost:${env.port} (${env.nodeEnv})`);
@@ -10,8 +10,10 @@ const server = app.listen(env.port, () => {
 let deliveryJob: Promise<void> | undefined;
 const deliveryTimer = setInterval(() => {
   if (deliveryJob) return;
+  // Finish due deliveries first (trigger T5 frees those riders), then hand a free rider to a waiting order.
   deliveryJob = completeDueDeliveries()
-    .catch((error) => console.error('Could not complete due deliveries', error))
+    .then(assignWaitingOrder)
+    .catch((error) => console.error('Delivery job failed', error))
     .finally(() => { deliveryJob = undefined; });
 }, 1000);
 

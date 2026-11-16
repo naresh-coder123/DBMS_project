@@ -1,4 +1,5 @@
 import { PoolClient } from 'pg';
+import { env } from '../config/env';
 import { pool } from '../db/pool';
 import { withTransaction } from '../db/transaction';
 import { DeliveryPerson, Order, OrderItem, OrderStatusLog, Payment } from '../types/models';
@@ -41,7 +42,6 @@ const orderCrud = createCrudService<Order>({
   table: 'orders',
   idColumn: 'o_id',
   entityName: 'Order',
-  columns: [],
   filterable: ['status', 'cust_id', 'rest_id', 'dp_id'],
   orderBy: 'o_id DESC',
 });
@@ -108,72 +108,7 @@ export async function createOrder(input: NewOrder): Promise<OrderDetails> {
     }
 
     return getOrder(order.o_id, client);
-  });
-}
-
-/** TX: change delivery address (only while PLACED). */
-export async function updateOrderAddress(orderId: number, o_addr: string): Promise<Order> {
-  return withTransaction(async (client) => {
-    const order = await lockOrder(client, orderId);
-    requireStatus(order, ['PLACED'], 'edit');
-    const { rows } = await client.query<Order>('UPDATE orders SET o_addr = $1 WHERE o_id = $2 RETURNING *', [
-      o_addr,
-      orderId,
-    ]);
-    return rows[0];
-  });
-}
-
-/** TX: add a line item. Lock first so concurrent adds get distinct line numbers. */
-export async function addOrderItem(orderId: number, menu_item_id: number, quantity: number): Promise<OrderDetails> {
-  return withTransaction(async (client) => {
-    const order = await lockOrder(client, orderId);
-    requireStatus(order, ['PLACED'], 'add items to');
-    await client.query('INSERT INTO order_item (o_id, menu_item_id, quantity) VALUES ($1, $2, $3)', [
-      orderId,
-      menu_item_id,
-      quantity,
-    ]);
-    return getOrder(orderId, client);
-  });
-}
-
-/** TX: change quantity of a line item. */
-export async function updateOrderItem(orderId: number, lineNo: number, quantity: number): Promise<OrderDetails> {
-  return withTransaction(async (client) => {
-    const order = await lockOrder(client, orderId);
-    requireStatus(order, ['PLACED'], 'edit items of');
-    const { rowCount } = await client.query('UPDATE order_item SET quantity = $1 WHERE o_id = $2 AND line_no = $3', [
-      quantity,
-      orderId,
-      lineNo,
-    ]);
-    if (!rowCount) throw AppError.notFound(`Line ${lineNo} of order`, orderId);
-    return getOrder(orderId, client);
-  });
-}
-
-/** TX: remove a line item; an order must keep at least one item. */
-export async function removeOrderItem(orderId: number, lineNo: number): Promise<OrderDetails> {
-  return withTransaction(async (client) => {
-    const order = await lockOrder(client, orderId);
-    requireStatus(order, ['PLACED'], 'remove items from');
-
-    const { rowCount } = await client.query('DELETE FROM order_item WHERE o_id = $1 AND line_no = $2', [
-      orderId,
-      lineNo,
-    ]);
-    if (!rowCount) throw AppError.notFound(`Line ${lineNo} of order`, orderId);
-
-    const { rows } = await client.query<{ n: number }>('SELECT COUNT(*)::INT AS n FROM order_item WHERE o_id = $1', [
-      orderId,
-    ]);
-    if (rows[0].n === 0) {
-      // Throwing here triggers ROLLBACK, so the DELETE above is undone.
-      throw AppError.conflict('Cannot remove the last item; cancel the order instead');
-    }
-    return getOrder(orderId, client);
-  });
+  }, 'createOrder', (created) => [created.o_id]);
 }
 
 /**
@@ -192,15 +127,20 @@ export async function payOrder(orderId: number, amountPaid: number, customerId?:
     await client.query('INSERT INTO payment (o_id, amount_paid) VALUES ($1, $2)', [orderId, amountPaid]);
     await client.query("UPDATE orders SET status = 'PAID' WHERE o_id = $1", [orderId]);
     return getOrder(orderId, client);
-  });
+  }, 'payOrder', [orderId]);
 }
 
 /**
  * TX: assign = lock order -> pick a random free delivery person
  * (FOR UPDATE SKIP LOCKED so parallel assignments never pick the
  * same person) -> mark them busy -> set order OUT_FOR_DELIVERY.
+ * No free delivery person -> throw -> ROLLBACK; the order stays PAID and waits.
  */
-export async function assignDelivery(orderId: number, customerId?: number): Promise<OrderDetails> {
+export async function assignDelivery(
+  orderId: number,
+  customerId?: number,
+  name = 'assignDelivery',
+): Promise<OrderDetails> {
   return withTransaction(async (client) => {
     const order = await lockOrder(client, orderId);
     if (customerId !== undefined && order.cust_id !== customerId) {
@@ -219,8 +159,7 @@ export async function assignDelivery(orderId: number, customerId?: number): Prom
        FOR UPDATE SKIP LOCKED`,
     );
     if (!dp) {
-      if (customerId !== undefined) return getOrder(orderId, client);
-      throw AppError.conflict('No delivery person is available right now');
+      throw AppError.conflict('No delivery person is available right now; the order stays PAID and waits');
     }
 
     await client.query('UPDATE delivery_person SET is_available = FALSE WHERE dp_id = $1', [dp.dp_id]);
@@ -229,7 +168,7 @@ export async function assignDelivery(orderId: number, customerId?: number): Prom
       orderId,
     ]);
     return getOrder(orderId, client);
-  });
+  }, name, [orderId]);
 }
 
 /** TX: deliver. Trigger fn_order_after_status frees the delivery person + logs. */
@@ -239,17 +178,21 @@ export async function markDelivered(orderId: number): Promise<OrderDetails> {
     requireStatus(order, ['OUT_FOR_DELIVERY'], 'deliver');
     await client.query("UPDATE orders SET status = 'DELIVERED' WHERE o_id = $1", [orderId]);
     return getOrder(orderId, client);
-  });
+  }, 'markDelivered', [orderId]);
 }
 
-/** Complete demo deliveries after five seconds. The status trigger releases each rider. */
+/**
+ * TX: complete demo deliveries after DELIVERY_SECONDS. The status trigger releases each rider.
+ * Recorded only when it actually delivered something.
+ */
 export async function completeDueDeliveries(): Promise<void> {
-  await pool.query(`
+  await withTransaction(async (client) => {
+    const { rows } = await client.query<{ o_id: number }>(`
     WITH due AS (
       SELECT o_id
       FROM orders
       WHERE status = 'OUT_FOR_DELIVERY'
-        AND updated_at <= now() - interval '5 seconds'
+        AND updated_at <= now() - make_interval(secs => $1)
       ORDER BY o_id
       FOR UPDATE SKIP LOCKED
     )
@@ -257,17 +200,37 @@ export async function completeDueDeliveries(): Promise<void> {
     SET status = 'DELIVERED'
     FROM due
     WHERE orders.o_id = due.o_id
-  `);
+    RETURNING orders.o_id
+  `, [env.deliverySeconds]);
+    return rows.map((row) => row.o_id);
+  }, 'completeDueDeliveries (automatic)', (delivered) => delivered);
+}
+
+/**
+ * Background job: when a delivery person is free, assign the order that has
+ * waited longest in PAID. Each attempt is its own assignDelivery transaction.
+ */
+export async function assignWaitingOrder(): Promise<void> {
+  const { rows: [waiting] } = await pool.query<{ o_id: number }>(
+    `SELECT o_id FROM orders
+     WHERE status = 'PAID' AND EXISTS (SELECT 1 FROM delivery_person WHERE is_available)
+     ORDER BY updated_at, o_id
+     LIMIT 1`,
+  );
+  if (waiting) await assignDelivery(waiting.o_id, undefined, 'assignDelivery (automatic)');
 }
 
 /** TX: cancel = refund payment (if any) + set CANCELLED, together. */
-export async function cancelOrder(orderId: number): Promise<OrderDetails> {
+export async function cancelOrder(orderId: number, customerId?: number): Promise<OrderDetails> {
   return withTransaction(async (client) => {
     const order = await lockOrder(client, orderId);
+    if (customerId !== undefined && order.cust_id !== customerId) {
+      throw AppError.notFound('Order', orderId);
+    }
     requireStatus(order, ['PLACED', 'PAID'], 'cancel');
 
     await client.query("UPDATE payment SET status = 'REFUNDED' WHERE o_id = $1 AND status = 'PAID'", [orderId]);
     await client.query("UPDATE orders SET status = 'CANCELLED' WHERE o_id = $1", [orderId]);
     return getOrder(orderId, client);
-  });
+  }, 'cancelOrder', [orderId]);
 }
